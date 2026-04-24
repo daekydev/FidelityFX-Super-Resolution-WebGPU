@@ -2,9 +2,13 @@
   "name": "app",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server.js",
+    "preview": "vite preview"
   },
   "repository": {
     "type": "git",
@@ -13,7 +17,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/daekydev/FidelityFX-Super-Resolution-WebGPU/issues"
   },
@@ -21,6 +24,7 @@
   "dependencies": {
     "artplayer": "^5.4.0",
     "express": "^5.2.1",
+    "playwright": "^1.59.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

@@ -1,3 +1,5 @@
+import easuCode from './fsr_easu.wgsl?raw';
+import rcasCode from './fsr_rcas.wgsl?raw';
 export async function setupFSR2WebGPU(videoElement, canvasElement) {
   if (!navigator.gpu) {
     throw new Error('WebGPU is not supported by your browser.');
@@ -12,10 +14,10 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
   const context = canvasElement.getContext('webgpu');
   const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
-  const renderWidth = 640;
-  const renderHeight = 360;
-  const outputWidth = 1280;
-  const outputHeight = 720;
+  const renderWidth = 1920;
+  const renderHeight = 1080;
+  const outputWidth = 3840;
+  const outputHeight = 2160;
 
   canvasElement.width = outputWidth;
   canvasElement.height = outputHeight;
@@ -26,10 +28,6 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
     alphaMode: 'premultiplied',
   });
 
-  const easuCodeResponse = await fetch('/src/fsr_easu.wgsl');
-  const easuCode = await easuCodeResponse.text();
-  const rcasCodeResponse = await fetch('/src/fsr_rcas.wgsl');
-  const rcasCode = await rcasCodeResponse.text();
 
   const resolutionBuffer = device.createBuffer({
     size: 4 * 4,

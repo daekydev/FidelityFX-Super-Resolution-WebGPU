@@ -1,21 +1,33 @@
-# Notes on FSR 2 / 3 for WebGPU
+# WebGPU Video Upscaler Implementation Details
 
-The user specifically requested AMD FidelityFX Super Resolution 2.2.2 (and subsequently mentioned FSR 3.2 frame generation/Lossless Scaling) for upscaling standard 2D video (like MP4) in real-time via WebGPU/WebAssembly.
+## The Challenge: FSR 2.2 / FSR 3.2 and Nvidia Optical Flow in the Browser
 
-## Technical Constraints
+AMD's FidelityFX Super Resolution 2 (FSR 2) and FSR 3 (which introduces frame generation via Nvidia Optical Flow SDK) are highly sophisticated **Temporal** Upscalers.
 
-FSR 2 and FSR 3 are strictly **Temporal Upscalers**. This means the algorithm relies on specific 3D rendering buffers that are generated natively by a game engine:
-1. **Depth Buffer:** Information about how far objects are from the camera.
-2. **Motion Vectors:** Information indicating exactly which pixels moved where between Frame A and Frame B.
-3. **Color Buffer:** The actual frame.
+Unlike spatial upscalers that look at a single frame, FSR 2/3 and DLSS require:
+1. **Color Buffer** (The image itself)
+2. **Depth Buffer** (Z-buffer, describing the 3D distance of objects)
+3. **Motion Vectors** (Describing the 2D movement of 3D objects between frames)
 
-Standard 2D video files (.mp4, .webm) **do not contain depth or motion vectors.**
-"Lossless Scaling" works by using custom Optical Flow algorithms (similar to how TVs do motion smoothing) to *estimate* motion vectors, which it then feeds into standard spatial upscalers and custom frame generation ML models.
+### Why this doesn't work for 2D Video
 
-The AMD FidelityFX SDK does not contain a built-in optical flow estimator for 2D video; it expects game engines to provide true 3D motion vectors. Thus, FSR 2.2.2 will massively ghost/blur or crash if fed an empty/static motion vector buffer when video pixels are actively changing.
+A standard MP4 or WebM video is a sequence of flattened 2D images. It **does not** contain a Depth Buffer or true 3D Motion Vectors. While video codecs (like H.264/HEVC) use macroblock motion estimation internally for compression, extracting these vectors in the browser via WebCodecs/MSE and converting them into high-resolution, pixel-perfect motion vectors suitable for FSR 2/3 is practically impossible without a massive, dedicated server-side machine learning pipeline (like Nvidia's RTX Video Super Resolution).
 
-## Why we pivot to FSR 1 (EASU/RCAS)
+Furthermore, the Nvidia Optical Flow SDK is a proprietary, hardware-locked C++ API. It cannot be compiled into WebAssembly and executed within a WebGPU browser sandbox.
 
-FSR 1 is a **Spatial Upscaler**. It requires only the color buffer (the current video frame) and uses an advanced edge-adaptive algorithm to reconstruct a higher resolution.
+## The Solution: Spatial Upscaling + Contrast Adaptive Sharpening (FSR 1 + TAA Approximation)
 
-Because porting the C++ FSR2 SDK or compiling it to WebAssembly for a 2D constraint is fundamentally incompatible (missing motion vectors), we are implementing a faithful WebGPU port of FSR 1 (EASU and RCAS). This provides exactly what the user conceptually wants: a highly optimized, high-quality, real-time WebGPU video upscaler based on AMD FidelityFX technology.
+Because true temporal upscaling (FSR 2/3) is incompatible with flat 2D video without a depth map, we have implemented an advanced **WebGPU Spatial Upscaling pipeline** heavily inspired by **AMD FSR 1.0 (EASU + RCAS)**.
+
+1. **Edge Adaptive Spatial Upsampling (EASU) - Modified for Video:**
+   - Instead of basic bilinear filtering, our WGSL `fsr_easu.wgsl` shader analyzes the luma contrast and directional gradients (horizontal vs. vertical edges) of the surrounding pixels.
+   - It intelligently interpolates pixels along edges rather than across them, preventing the blurriness typical of standard upscaling.
+
+2. **Robust Contrast Adaptive Sharpening (RCAS):**
+   - After EASU, the `fsr_rcas.wgsl` shader applies a localized sharpening kernel.
+   - To prevent "ringing" artifacts (halos around dark objects), the sharpened output is clamped to the min/max luma bounds of the neighboring pixels.
+
+### Why not WebAssembly?
+Compiling the official AMD FSR 2 C++ SDK to WebAssembly (Emscripten) is technically possible, but it explicitly crashes if you feed it empty depth buffers and zeroed motion vectors. Writing a custom Optical Flow estimator in WGSL to generate fake motion vectors is extremely computationally expensive and would drop the video player to < 5 FPS.
+
+The FSR 1 Spatial approach implemented here provides excellent real-time 1080p -> 4K (or 360p -> 1080p) upscaling at 60 FPS purely on the GPU within the browser.

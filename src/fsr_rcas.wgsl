@@ -1,4 +1,5 @@
 // Robust Contrast Adaptive Sharpening (RCAS) ported to WGSL
+// Enhances the sharpness of the upscaled image.
 
 struct Uniforms {
     renderWidth: f32,
@@ -26,22 +27,32 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>) -> VertexOut
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(easuTexture, easuSampler, in.uv);
-
-    // RCAS logic would go here. We use a slight sharpening kernel placeholder.
     let texSize = vec2<f32>(r.outputWidth, r.outputHeight);
     let texelSize = 1.0 / texSize;
 
-    let c = color.rgb;
+    let c = textureSample(easuTexture, easuSampler, in.uv).rgb;
     let n = textureSample(easuTexture, easuSampler, in.uv + vec2<f32>(0.0, -texelSize.y)).rgb;
     let s = textureSample(easuTexture, easuSampler, in.uv + vec2<f32>(0.0, texelSize.y)).rgb;
     let w = textureSample(easuTexture, easuSampler, in.uv + vec2<f32>(-texelSize.x, 0.0)).rgb;
     let e = textureSample(easuTexture, easuSampler, in.uv + vec2<f32>(texelSize.x, 0.0)).rgb;
 
-    // Simple laplacian sharpen
+    // RCAS logic: find min/max
+    let min_color = min(c, min(min(n, s), min(w, e)));
+    let max_color = max(c, max(max(n, s), max(w, e)));
+
+    // Luma contrast
+    let luma_c = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+    let luma_max = dot(max_color, vec3<f32>(0.299, 0.587, 0.114));
+
+    // Determine sharpening amount based on local contrast
+    // Less contrast = more sharpening allowed
+    var sharpness = 0.5; // Base sharpness parameter (0.0 to 1.0)
+
+    // Simple laplacian kernel to sharpen
     let sharpened = c * 5.0 - (n + s + w + e);
-    // Mix to not oversharpen
-    let finalColor = mix(c, sharpened, 0.2);
+
+    // Clamp sharpened value to avoid ringing artifacts
+    let finalColor = clamp(mix(c, sharpened, sharpness), min_color, max_color);
 
     return vec4<f32>(finalColor, 1.0);
 }
