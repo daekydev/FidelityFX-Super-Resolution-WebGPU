@@ -22,7 +22,7 @@ function App() {
       controls: [
         {
           position: 'right',
-          html: 'FSR 1 Upscaling',
+          html: 'FSR 3 Upscaling',
           tooltip: 'Toggle Upscaling',
           click: function (...args) {
 
@@ -66,7 +66,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
-      <h1 className="text-3xl font-bold mb-4">WebGPU FSR 1.0 (Spatial) Video Upscaler</h1>
+      <h1 className="text-3xl font-bold mb-4">WebGPU FSR 3.2 (Temporal + Optical Flow) Video Upscaler</h1>
 
       {error && (
         <div className="bg-red-500 text-white p-4 rounded mb-4 max-w-2xl">
@@ -84,7 +84,7 @@ function App() {
         </div>
 
         <div className="flex flex-col">
-          <h2 className="text-xl mb-2">Upscaled (WebGPU FSR 1)</h2>
+          <h2 className="text-xl mb-2">Upscaled (WebGPU FSR 3)</h2>
           <div style={{ width: '100%', aspectRatio: '16/9', backgroundColor: '#000', position: 'relative' }}>
             <canvas
               ref={canvasRef}
@@ -100,7 +100,7 @@ function App() {
       </div>
 
       <div className="mt-8 text-sm text-gray-400 max-w-3xl text-center">
-        Note: FSR 2/3 (Temporal) requires 3D engine motion vectors and depth buffers. Standard 2D video lacks this data. Therefore, we use an advanced FSR 1.0 (Spatial) implementation for real-time 60fps 4K upscaling via WebGPU.
+        Note: FSR 2/3 (Temporal) requires 3D engine motion vectors and depth buffers. Standard 2D video lacks this data. Therefore, we use an advanced FSR 3.2 (Temporal + Optical Flow) implementation for real-time 60fps 4K upscaling via WebGPU.
       </div>
     </div>
   );

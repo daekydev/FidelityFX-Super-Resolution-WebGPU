@@ -1,14 +1,16 @@
+import opticalFlowCode from './optical_flow.wgsl?raw';
+import fsrTemporalCode from './fsr_temporal.wgsl?raw';
 import easuCode from './fsr_easu.wgsl?raw';
 import rcasCode from './fsr_rcas.wgsl?raw';
+
+
 export async function setupFSR2WebGPU(videoElement, canvasElement) {
   if (!navigator.gpu) {
     throw new Error('WebGPU is not supported by your browser.');
   }
 
   const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) {
-    throw new Error('Failed to get GPU adapter.');
-  }
+  if (!adapter) throw new Error('Failed to get GPU adapter.');
 
   const device = await adapter.requestDevice();
   const context = canvasElement.getContext('webgpu');
@@ -26,22 +28,11 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
     device,
     format: presentationFormat,
     alphaMode: 'premultiplied',
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
   });
 
-
-  const resolutionBuffer = device.createBuffer({
-    size: 4 * 4,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-
-  device.queue.writeBuffer(
-    resolutionBuffer,
-    0,
-    new Float32Array([renderWidth, renderHeight, outputWidth, outputHeight])
-  );
-
-  const easuShader = device.createShaderModule({ code: easuCode });
-  const rcasShader = device.createShaderModule({ code: rcasCode });
+  const opticalFlowShader = device.createShaderModule({ code: opticalFlowCode });
+  const fsrTemporalShader = device.createShaderModule({ code: fsrTemporalCode });
 
   const samplerInfo = {
     magFilter: 'linear',
@@ -49,13 +40,31 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
     addressModeU: 'clamp-to-edge',
     addressModeV: 'clamp-to-edge',
   };
-  const videoSampler = device.createSampler(samplerInfo);
-  const easuSampler = device.createSampler(samplerInfo);
+  const smp = device.createSampler(samplerInfo);
 
-  const intermediateTexture = device.createTexture({
-    size: { width: outputWidth, height: outputHeight, depthOrArrayLayers: 1 },
+  // Textures for Optical Flow and Temporal Accumulation
+  let previousFrameTex = device.createTexture({
+    size: [renderWidth, renderHeight, 1],
+    format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+
+  const motionVectorTex = device.createTexture({
+    size: [renderWidth, renderHeight, 1],
     format: 'rgba16float',
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+  });
+
+  let intermediateUpscaledTex = device.createTexture({
+    size: [outputWidth, outputHeight, 1],
+    format: presentationFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+  });
+
+  let historyFrameTex = device.createTexture({
+    size: [renderWidth, renderHeight, 1],
+    format: presentationFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
   });
 
   const vertices = new Float32Array([
@@ -82,33 +91,45 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
     ],
   };
 
+  const opticalFlowPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module: opticalFlowShader, entryPoint: 'vs_main', buffers: [vertexBufferLayout] },
+    fragment: { module: opticalFlowShader, entryPoint: 'fs_main', targets: [{ format: 'rgba16float' }] },
+    primitive: { topology: 'triangle-list' },
+  });
+
+  const fsrTemporalPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module: fsrTemporalShader, entryPoint: 'vs_main', buffers: [vertexBufferLayout] },
+    fragment: { module: fsrTemporalShader, entryPoint: 'fs_main', targets: [{ format: presentationFormat }] },
+    primitive: { topology: 'triangle-list' },
+  });
+
+    const easuShader = device.createShaderModule({ code: easuCode });
+  const rcasShader = device.createShaderModule({ code: rcasCode });
+
+  const resolutionBuffer = device.createBuffer({
+    size: 4 * 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  device.queue.writeBuffer(
+    resolutionBuffer,
+    0,
+    new Float32Array([renderWidth, renderHeight, outputWidth, outputHeight])
+  );
+
   const easuPipeline = device.createRenderPipeline({
     layout: 'auto',
-    vertex: {
-      module: easuShader,
-      entryPoint: 'vs_main',
-      buffers: [vertexBufferLayout]
-    },
-    fragment: {
-      module: easuShader,
-      entryPoint: 'fs_main',
-      targets: [{ format: 'rgba16float' }],
-    },
+    vertex: { module: easuShader, entryPoint: 'vs_main', buffers: [vertexBufferLayout] },
+    fragment: { module: easuShader, entryPoint: 'fs_main', targets: [{ format: 'rgba16float' }] },
     primitive: { topology: 'triangle-list' },
   });
 
   const rcasPipeline = device.createRenderPipeline({
     layout: 'auto',
-    vertex: {
-      module: rcasShader,
-      entryPoint: 'vs_main',
-      buffers: [vertexBufferLayout]
-    },
-    fragment: {
-      module: rcasShader,
-      entryPoint: 'fs_main',
-      targets: [{ format: presentationFormat }],
-    },
+    vertex: { module: rcasShader, entryPoint: 'vs_main', buffers: [vertexBufferLayout] },
+    fragment: { module: rcasShader, entryPoint: 'fs_main', targets: [{ format: presentationFormat }] },
     primitive: { topology: 'triangle-list' },
   });
 
@@ -122,7 +143,21 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
     entries: [{ binding: 0, resource: { buffer: resolutionBuffer } }],
   });
 
+  let easuOutputTex = device.createTexture({
+    size: [outputWidth, outputHeight, 1],
+    format: 'rgba16float',
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+  });
+
+  let temporalOutputTex = device.createTexture({
+    size: [renderWidth, renderHeight, 1],
+    format: presentationFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+  });
+
   let videoTexture = null;
+  let isFirstFrame = true;
+
   const updateVideoTexture = () => {
     if (!videoElement.videoWidth || !videoElement.videoHeight) return null;
 
@@ -130,7 +165,7 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
         videoTexture = device.createTexture({
         size: [videoElement.videoWidth, videoElement.videoHeight, 1],
         format: 'rgba8unorm',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
         });
     }
 
@@ -148,53 +183,93 @@ export async function setupFSR2WebGPU(videoElement, canvasElement) {
       const currentVideoTexture = updateVideoTexture();
 
       if (currentVideoTexture) {
-        const easuBindGroup0 = device.createBindGroup({
-            layout: easuPipeline.getBindGroupLayout(0),
-            entries: [
-            { binding: 0, resource: currentVideoTexture.createView() },
-            { binding: 1, resource: videoSampler },
-            ],
-        });
+        if (isFirstFrame) {
+            // Initialize previous frame with current frame
+            const commandEncoder = device.createCommandEncoder();
+            commandEncoder.copyTextureToTexture(
+                { texture: currentVideoTexture },
+                { texture: previousFrameTex },
+                [renderWidth, renderHeight, 1]
+            );
+            device.queue.submit([commandEncoder.finish()]);
+            isFirstFrame = false;
+        }
 
         const commandEncoder = device.createCommandEncoder();
 
-        const easuPassEncoder = commandEncoder.beginRenderPass({
-            colorAttachments: [{
-                view: intermediateTexture.createView(),
-                loadOp: 'clear',
-                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-                storeOp: 'store',
-            }],
-        });
-        easuPassEncoder.setPipeline(easuPipeline);
-        easuPassEncoder.setVertexBuffer(0, vertexBuffer);
-        easuPassEncoder.setBindGroup(0, easuBindGroup0);
-        easuPassEncoder.setBindGroup(1, easuUniformBindGroup);
-        easuPassEncoder.draw(6, 1, 0, 0);
-        easuPassEncoder.end();
-
-        const rcasBindGroup0 = device.createBindGroup({
-            layout: rcasPipeline.getBindGroupLayout(0),
+        // 1. Optical Flow Pass
+        const ofBindGroup = device.createBindGroup({
+            layout: opticalFlowPipeline.getBindGroupLayout(0),
             entries: [
-            { binding: 0, resource: intermediateTexture.createView() },
-            { binding: 1, resource: easuSampler },
+                { binding: 0, resource: currentVideoTexture.createView() },
+                { binding: 1, resource: previousFrameTex.createView() },
+                { binding: 2, resource: smp },
             ],
         });
 
-        const rcasPassEncoder = commandEncoder.beginRenderPass({
+        const ofPassEncoder = commandEncoder.beginRenderPass({
             colorAttachments: [{
-                view: context.getCurrentTexture().createView(),
+                view: motionVectorTex.createView(),
+                loadOp: 'clear',
+                clearValue: { r: 0.5, g: 0.5, b: 0.0, a: 1.0 }, // 0.5 is zero motion
+                storeOp: 'store',
+            }],
+        });
+        ofPassEncoder.setPipeline(opticalFlowPipeline);
+        ofPassEncoder.setVertexBuffer(0, vertexBuffer);
+        ofPassEncoder.setBindGroup(0, ofBindGroup);
+        ofPassEncoder.draw(6, 1, 0, 0);
+        ofPassEncoder.end();
+
+        // 2. FSR Temporal Upscaling Pass
+        const fsrBindGroup = device.createBindGroup({
+            layout: fsrTemporalPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: currentVideoTexture.createView() },
+                { binding: 1, resource: historyFrameTex.createView() },
+                { binding: 2, resource: motionVectorTex.createView() },
+                { binding: 3, resource: smp },
+            ],
+        });
+
+
+        const fsrPassEncoder = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+                view: intermediateUpscaledTex.createView(),
                 loadOp: 'clear',
                 clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
                 storeOp: 'store',
             }],
         });
-        rcasPassEncoder.setPipeline(rcasPipeline);
-        rcasPassEncoder.setVertexBuffer(0, vertexBuffer);
-        rcasPassEncoder.setBindGroup(0, rcasBindGroup0);
-        rcasPassEncoder.setBindGroup(1, rcasUniformBindGroup);
-        rcasPassEncoder.draw(6, 1, 0, 0);
-        rcasPassEncoder.end();
+        fsrPassEncoder.setPipeline(fsrTemporalPipeline);
+        fsrPassEncoder.setVertexBuffer(0, vertexBuffer);
+        fsrPassEncoder.setBindGroup(0, fsrBindGroup);
+        fsrPassEncoder.draw(6, 1, 0, 0);
+        fsrPassEncoder.end();
+
+        // 3. Update Textures for next frame
+        commandEncoder.copyTextureToTexture(
+            { texture: currentVideoTexture },
+            { texture: previousFrameTex },
+            [renderWidth, renderHeight, 1]
+        );
+
+
+        // Copy to Canvas
+        const currentTexture = context.getCurrentTexture();
+        commandEncoder.copyTextureToTexture(
+            { texture: intermediateUpscaledTex },
+            { texture: currentTexture },
+            [outputWidth, outputHeight, 1]
+        );
+
+        // Copy to History
+        commandEncoder.copyTextureToTexture(
+            { texture: intermediateUpscaledTex },
+            { texture: historyFrameTex },
+            [outputWidth, outputHeight, 1]
+        );
+
 
         device.queue.submit([commandEncoder.finish()]);
       }
